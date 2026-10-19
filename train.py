@@ -74,8 +74,8 @@ def get_parser():
     parser.add_argument(
         '--GT',default=True)
     parser.add_argument(
-        '--train_model', default='GATraj',
-        help='Your model name')
+        '--train_model', default=None,
+        help='Optional experiment name; by default derived from modules and seed')
     parser.add_argument(
         '--load_model', default=0,type=int,
         help="load model weights from this index before training or testing")
@@ -85,6 +85,20 @@ def get_parser():
     parser.add_argument(
         '--seed', default=1, type=int,
         help='Random seed for training and deterministic data ordering')
+    parser.add_argument('--motion_module', default=False, type=ast.literal_eval)
+    parser.add_argument('--relative_velocity', default=True, type=ast.literal_eval)
+    parser.add_argument('--closest_approach', default=True, type=ast.literal_eval)
+    parser.add_argument('--confidence_gate', default=True, type=ast.literal_eval)
+    parser.add_argument('--adaptive_neighbors', default=False, type=ast.literal_eval)
+    parser.add_argument('--fix_attention', default=True, type=ast.literal_eval,
+                        help='Shared baseline fix: learned scalar attention and explicit masks')
+    parser.add_argument('--velocity_window', default=3, type=int)
+    parser.add_argument('--velocity_scale', default=0.5, type=float,
+                        help='Feature scale in metres per sampled frame')
+    parser.add_argument('--risk_radius', default=2.0, type=float,
+                        help='Closest-approach feature scale and optional neighbor threshold, metres')
+    parser.add_argument('--adaptive_radius', default=15.0, type=float,
+                        help='Maximum current distance for optional additional neighbors, metres')
     parser.add_argument(
         '--model', default='models.GATraj')
     ######################################
@@ -127,7 +141,7 @@ def get_parser():
     parser.add_argument(
         '--clip',default=10,type=int)
     return parser
-def load_arg(p):
+def load_arg(p, parser):
     # save arg
     if  os.path.exists(p.config):
         with open(p.config, 'r') as f:
@@ -162,21 +176,43 @@ def prepare_seed(rand_seed):
 	if hasattr(torch.backends, 'cudnn'):
 		torch.backends.cudnn.deterministic = True
 		torch.backends.cudnn.benchmark = False
+
+def experiment_name(args):
+    if args.motion_module:
+        variant = 'RiskMotion_v{}_r{}_c{}_a{}'.format(
+            int(args.relative_velocity), int(args.closest_approach),
+            int(args.confidence_gate), int(args.adaptive_neighbors))
+    else:
+        variant = 'GATraj_baseline'
+    return '{}_attn{}_s{}'.format(variant, int(args.fix_attention), args.seed)
 	
-if __name__ == '__main__':
+def parse_run_args(default_phase='train'):
     parser = get_parser()
+    parser.set_defaults(phase=default_phase)
     p = parser.parse_args()
-    prepare_seed(p.seed)
-    p.save_dir=p.save_base_dir+str(p.test_set)+'/' # ./savedata/1'
-    p.model_dir=p.save_base_dir+str(p.test_set)+'/'+p.train_model+'/' # ./savedata/1/GATraj/'
-    p.config=p.model_dir+'/config_'+p.phase+'.yaml' # ./savedata/1/GATraj/config_train.ymal'
+    if p.velocity_window < 1 or min(p.velocity_scale, p.risk_radius, p.adaptive_radius) <= 0:
+        parser.error('Motion windows and scales must be positive')
+    if p.num_epochs < 1 or p.epochs_per_run < 0:
+        parser.error('num_epochs must be positive and epochs_per_run nonnegative')
+    if p.train_model is None:
+        p.train_model = experiment_name(p)
+    p.save_dir = os.path.join(p.save_base_dir, str(p.test_set))
+    p.model_dir = os.path.join(p.save_dir, p.train_model)
+    p.config = os.path.join(p.model_dir, 'config_' + p.phase + '.yaml')
     # print(p.seq_length) # 5 + 8 = 13
-    if not load_arg(p):
+    if not load_arg(p, parser):
         save_arg(p)
-    args = load_arg(p)
+    args = load_arg(p, parser)
+    # Resolve seeds after loading configuration, then record the actual CLI overrides.
+    prepare_seed(args.seed)
+    save_arg(args)
     print(args.num_pred)
     if args.using_cuda:
         torch.cuda.set_device(args.gpu)
+    return args
+
+if __name__ == '__main__':
+    args = parse_run_args()
     processor = Processor(args)
     if args.phase=='test':
         processor.playtest()

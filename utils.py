@@ -8,6 +8,8 @@ import os
 import pickle
 import numpy as np
 import random
+import hashlib
+import json
 from tqdm import tqdm
 
 class DataLoader_bytrajec2():
@@ -48,9 +50,14 @@ class DataLoader_bytrajec2():
 
         self.train_data_file = os.path.join(self.args.save_dir,"train_trajectories.cpkl")
         self.test_data_file = os.path.join(self.args.save_dir, "test_trajectories.cpkl")
-        seed = getattr(self.args, 'seed', 1)
-        self.train_batch_cache = os.path.join(self.args.save_dir, f"train_batch_cache_seed{seed}.cpkl")
-        self.test_batch_cache = os.path.join(self.args.save_dir, f"test_batch_cache_seed{seed}.cpkl")
+        # Modules share identical batches; changes to preprocessing invalidate caches.
+        cache_config = {key: getattr(args, key) for key in (
+            'dataset', 'test_set', 'seed', 'batch_size', 'seq_length',
+            'obs_length', 'pred_length', 'neighbor_thred', 'val_fraction', 'ifvalid',
+            'input_size', 'min_obs')}
+        cache_key = hashlib.sha256(json.dumps(cache_config, sort_keys=True).encode()).hexdigest()[:12]
+        self.train_batch_cache = os.path.join(self.args.save_dir, f"train_batch_cache_{cache_key}.cpkl")
+        self.test_batch_cache = os.path.join(self.args.save_dir, f"test_batch_cache_{cache_key}.cpkl")
 
         print("Creating pre-processed data from raw data.")
         self.traject_preprocess('train')

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+savedata/
+outputs/
+*.cpkl
+.pytest_cache/

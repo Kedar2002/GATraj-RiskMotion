@@ -12,7 +12,6 @@ from torch import nn, Tensor
 from typing import Dict, List, Tuple, NamedTuple, Any
 import matplotlib.pyplot as plt
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 
 

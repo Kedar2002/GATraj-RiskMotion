@@ -6,11 +6,11 @@ Date: 2022/09/24
 from utils import *
 from basemodel import *
 from laplace_decoder import *
+from motion_interaction import MotionEdgeEncoder
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 class SoftTargetCrossEntropyLoss(nn.Module):
 
@@ -105,10 +105,15 @@ class GATraj(nn.Module):
         else:
             self.reg_loss = LaplaceNLLLoss(reduction='mean')
         self.cls_loss = SoftTargetCrossEntropyLoss(reduction='mean')
+        self.motion_module = getattr(args, 'motion_module', False)
+        if self.motion_module:
+            if not args.SR:
+                raise ValueError('motion_module requires --SR True')
+            self.motion_edges = MotionEdgeEncoder(args)
 
-    def forward(self, inputs, epoch, iftest=False):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    def forward(self, inputs, epoch, iftest=False, return_mixture=False):
         batch_abs_gt, batch_norm_gt, nei_list_batch, nei_num_batch, batch_split = inputs # #[H, N, 2], [H, N, 2], [B, H, N, N], [N, H], [B, 2]
+        device = batch_abs_gt.device
         self.batch_norm_gt = batch_norm_gt
         if self.args.input_offset:
             train_x = batch_norm_gt[1:self.args.obs_length, :, :] - batch_norm_gt[:self.args.obs_length-1, :, :] #[H, N, 2]
@@ -136,8 +141,13 @@ class GATraj(nn.Module):
                     corr_index = corr.transpose(0,1)-corr  #[N, N, D]
                     nei_num = nei_num_batch[left:right, self.args.obs_length-1] #[N]
                     nei_index = torch.tensor(nei_list_batch[b][self.args.obs_length-1], device=device) #[N, N]
+                    edge_embedding = None
+                    if self.motion_module:
+                        # Slice before constructing features: future labels never enter the graph.
+                        observed = batch_abs_gt[:self.args.obs_length, left:right, :2]
+                        edge_embedding, nei_index = self.motion_edges(observed, nei_index)
                     for i in range(self.args.pass_time):
-                        element_states, cn_state = self.Global_interaction[i](corr_index, nei_index, nei_num, element_states, cn_state)
+                        element_states, cn_state = self.Global_interaction[i](corr_index, nei_index, nei_num, element_states, cn_state, edge_embedding)
                     self.hidden_state_global[left: right] = element_states
                     cn_global[left: right] = cn_state
                 else:
@@ -147,6 +157,8 @@ class GATraj(nn.Module):
             self.hidden_state_global = self.hidden_state_unsplited
             cn_global = cn
         mdn_out = self.Laplacian_Decoder.forward(self.x_encoded_dense, self.hidden_state_global, cn_global, epoch)
+        if return_mixture:
+            return mdn_out  # Label-free predictions for evaluation and timing.
         GATraj_loss, full_pre_tra = self.mdn_loss(train_y.permute(2, 0, 1), mdn_out, 1, iftest)  #[K, H, N, 2]
         return GATraj_loss, full_pre_tra
 

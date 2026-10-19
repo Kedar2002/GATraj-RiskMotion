@@ -1,174 +1,151 @@
-# GATraj: A Graph- and Attention-based Multi-Agent Trajectory Prediction Model
-Code for ["GATraj: A Graph- and Attention-based Multi-Agent Trajectory Prediction Model"](https://www.sciencedirect.com/science/article/pii/S092427162300268X)
+# GATraj-RiskMotion
 
-![](imgs/introduction.gif)
+A lightweight experimental extension of [GATraj](https://github.com/mengmengliu1998/GATraj)
+for the five ETH/UCY pedestrian folds. It conditions GATraj's existing social
+gate and attention on **relative velocity and anticipated closest approach**,
+with confidence gating and optional adaptive neighbors. There are no new labels,
+maps, external predictors, training stages, or loss terms.
 
-# Environment
-```
-pip install -r requirements.txt
-```
+**This is an unvalidated research hypothesis. No improved ADE/FDE results are
+claimed.** The encoder, 20-mode decoder, Laplace/classification loss and
+1,000-epoch cosine schedule are retained. A zero-initialized edge residual
+starts the modified model at the shared corrected baseline.
 
-### Google Colab / Kaggle
+The original MIT license and Git history are retained. Supplied upstream
+checkpoints are excluded from this repository's current files: they are not
+RiskMotion weights. See [the original README](docs/UPSTREAM_README.md) for paper
+attribution and dataset sources. The code supports ETH/UCY, not nuScenes.
 
-The repository implements the **ETH/UCY pedestrian experiments**. It does not
-include the nuScenes data adapter/evaluator used for the vehicle experiments
-in the paper. The default data loader expects to be run from this directory
-and reads the five benchmark scene CSVs from `data/`.
+## Kaggle
 
-The GitHub clone includes ETH, Hotel, Zara1, Zara2 and the UCY University
-benchmark CSVs. The separate `students003`, `uni_examples` and `zara03`
-folders are auxiliary scene fragments and are not used in the standard
-five-dataset leave-one-out evaluation. Dataset IDs are 0=ETH, 1=Hotel,
-2=Zara1, 3=Zara2, 4=University.
+Import [Kaggle_RiskMotion.ipynb](Kaggle_RiskMotion.ipynb), enable **Internet**
+and a **GPU accelerator**, and run its cells. It trains one held-out fold in
+100-epoch chunks with an unchanged 1,000-epoch schedule. Changing
+`MOTION_MODULE` selects the baseline or modified model. The notebook resumes
+from the latest numbered checkpoint present in its output directory.
 
-For Colab, enable a GPU under **Runtime → Change runtime type**. For Kaggle,
-enable **Settings → Accelerator → GPU**. Clone the repository in a fresh
-notebook, install the requirements, then run from the `GATraj` directory:
-
-```bash
-git clone https://github.com/mengmengliu1998/GATraj.git
-cd GATraj
-python -m pip install -r requirements.txt
-python - <<'PY'
-import torch
-print('PyTorch:', torch.__version__)
-print('CUDA available:', torch.cuda.is_available())
-if torch.cuda.is_available(): print('GPU:', torch.cuda.get_device_name(0))
-PY
-```
-
-Train one fold (for example, hold out ETH):
-
-```bash
-python train.py --test_set 0 --num_epochs 1000 --x_encoder_layers 3 \
-  --eta_min 1e-5 --batch_size 32 --learning_rate 5e-4 \
-  --randomRotate True --final_mode 20 --neighbor_thred 10 \
-  --using_cuda True --gpu 0 --clip 1 --pass_time 2 \
-  --ifGaussian False --SR True --input_offset True
-```
-
-For a quick smoke run, set `--num_epochs 1` (this is only a runtime check, not
-a meaningful reproduction). Colab/Kaggle sessions can disconnect. To train in
-100-epoch sessions while keeping one 1,000-epoch cosine learning-rate schedule,
-keep `--num_epochs 1000` fixed and set `--epochs_per_run 100`. Resume each
-session with `--load_model <last completed epoch>` (use `0` for the first
-session). Checkpoints include model, optimizer, scheduler and random-number
-generator states. For example, in a Colab notebook cell, run:
+Or use notebook cells directly:
 
 ```python
-from pathlib import Path
-import subprocess
-
-epochs = range(100, 1001, 100)
-for end_epoch in epochs:
-    previous_epoch = end_epoch - 100
-    command = [
-        "python", "train.py",
-        "--test_set", "1",
-        "--num_epochs", "1000",
-        "--epochs_per_run", "100",
-        "--x_encoder_layers", "3",
-        "--eta_min", "1e-5",
-        "--batch_size", "32",
-        "--learning_rate", "5e-4",
-        "--randomRotate", "True",
-        "--final_mode", "20",
-        "--neighbor_thred", "10",
-        "--using_cuda", "True",
-        "--gpu", "0",
-        "--clip", "1",
-        "--pass_time", "2",
-        "--ifGaussian", "False",
-        "--SR", "True",
-        "--input_offset", "True",
-        "--seed", "1",
-        "--load_model", str(previous_epoch),
-    ]
-    subprocess.run(command, check=True)
-
-    # Mount Google Drive first; this preserves the checkpoints if Colab resets.
-    source = Path("savedata/1/GATraj")
-    destination = Path("/content/drive/MyDrive/GATraj/savedata/1/GATraj")
-    destination.mkdir(parents=True, exist_ok=True)
-    for checkpoint in source.glob("GATraj_*.tar"):
-        target = destination / checkpoint.name
-        if not target.exists() or checkpoint.stat().st_mtime > target.stat().st_mtime:
-            target.write_bytes(checkpoint.read_bytes())
+!git clone https://github.com/Kedar2002/GATraj-RiskMotion.git /kaggle/working/GATraj-RiskMotion
+%cd /kaggle/working/GATraj-RiskMotion
+!python -m pip install -q -r requirements.txt
 ```
 
-If a session stops unexpectedly, restore `savedata/1/GATraj/GATraj_<epoch>.tar`
-from Drive and resume with `--load_model <epoch>`; retain the same seed and
-training arguments. To test a checkpoint, add `--phase test --load_model
-<epoch>`. Run IDs 0 through 4 for the five folds. Checkpoints made before
-scheduler state was saved can be loaded, but their exact learning-rate history
-cannot be reconstructed; for a strict reproducible comparison, start a fresh
-run with this version.
-
-### Dataset sources
-
-- ETH: ETH/Hotel benchmark data and project resources are available from the
-  [ETH Zurich Social Vision Group](https://www.vision.ee.ethz.ch/en/datasets/).
-- UCY: the original UCY pedestrian benchmark is distributed with the
-  [UCY Computer Vision datasets](https://graphics.cs.ucy.ac.cy/research/downloads/crowd-data/).
-- The repository's `data/` files are already preprocessed `true_pos_.csv`
-  files. If downloading raw benchmark data instead, convert it to the layout
-  and CSV format expected by `utils.py`; these files are not plug-compatible
-  with arbitrary ETH/UCY downloads without preprocessing.
-- nuScenes is a separate, large autonomous-driving dataset. Access requires
-  accepting its terms on the [official nuScenes download page](https://www.nuscenes.org/download).
-  This repository does not currently provide the nuScenes training/evaluation
-  pipeline, so the ETH/UCY commands above do not reproduce those results.
-
-## Train
-The Default settings are to train on ETH-eth. Data cache and models will be in the subdirectory "./savedata/0/".
-
-```
-git clone https://github.com/mengmengliu1998/GATraj.git
-cd GATraj
-python train.py --test_set <dataset to train> --num_epochs 1000 --x_encoder_layers 3 --eta_min 1e-5  --batch_size 32\
-  --learning_rate 5e-4  --randomRotate True --final_mode 20 --neighbor_thred 10\
-  --using_cuda True --clip 1 --pass_time 2 --ifGaussian False --SR True --input_offset True 
+```python
+!python train.py \
+  --test_set 1 --seed 1 --num_epochs 1000 --epochs_per_run 0 \
+  --x_encoder_layers 3 --eta_min 1e-5 --batch_size 32 \
+  --learning_rate 5e-4 --randomRotate True --final_mode 20 \
+  --neighbor_thred 10 --using_cuda True --gpu 0 --clip 1 \
+  --pass_time 2 --ifGaussian False --SR True --input_offset True \
+  --fix_attention True --motion_module True \
+  --relative_velocity True --closest_approach True \
+  --confidence_gate True --adaptive_neighbors False \
+  --save_base_dir /kaggle/working/runs
 ```
 
-Configuration files are also created after the first run, arguments could be modified through configuration files or command line. 
-Priority: command line \> configuration files \> default values in script.
+For the shared corrected baseline, change **only** `--motion_module False`.
+Experiment directories are generated from flags and seed, so baseline,
+component ablations and seeds do not overwrite one another. You can override
+the directory name with `--train_model <unique-name>`; use unique names when
+altering other hyperparameters such as `risk_radius`.
 
+Fold IDs: **0=ETH, 1=Hotel, 2=Zara1, 3=Zara2, 4=University**. For each fold,
+the other four scenes train an independent model. The bundled CSV files are
+used directly, with 8 observed and 12 predicted steps.
 
-The datasets are selected on arguments '--test_set'. Five datasets in ETH/UCY are corresponding to the value of \[0,1,2,3,4\] ([**eth, hotel, zara1, zara2, univ**]). 
+## On/off switches
 
-### Example
+| Argument | Default | Effect |
+|---|---|---|
+| `--motion_module` | `False` | Master switch for the proposed edge residual |
+| `--relative_velocity` | `True` | Include two relative-velocity features when the master switch is on |
+| `--closest_approach` | `True` | Include time, separation, closing speed and risk features |
+| `--confidence_gate` | `True` | Attenuate motion features when recent velocities are inconsistent |
+| `--adaptive_neighbors` | `False` | Add approaching agents within a bounded 15 m radius |
+| `--fix_attention` | `True` | Shared scalar-score/mask correction; keep identical in baseline and modification |
 
-This command is to train model for ETH-eth
+Motion settings are `velocity_window=3` observed displacements,
+`velocity_scale=0.5` metres per sampled frame, `risk_radius=2.0` metres and
+`adaptive_radius=15.0` metres. Times use sampled frames, not seconds.
+Defaults are fixed starting hypotheses, not values optimized on test folds.
+Keep adaptive expansion off for the primary comparison and measure it as
+an additional ablation.
+
+## Resume correctly
+
+Keep `--num_epochs 1000` throughout. Add `--epochs_per_run 100` to stop after
+100 further epochs and `--load_model 100` to continue at epoch 101. Repeat the
+same architecture, seed and training arguments. `--epochs_per_run 0` runs to
+the final epoch. The notebook automates this process.
+
+Checkpoints contain weights, Adam moments, scheduler state, Python/NumPy/
+PyTorch/CUDA RNG states, and the actual experiment configuration. An
+incompatible configuration raises an error. Checkpoints are written through
+a temporary file, then replaced. Batch caches include the fold, seed and
+preprocessing settings in their identity.
+
+Outputs live under `<save_base_dir>/<fold>/<experiment>/`. Kaggle's
+`/kaggle/working` survives as output only when saved with the notebook version;
+attach/download saved output and restore it to continue in a new runtime.
+Automatic resume finds files already present; it does not recover an unsaved
+runtime. Every epoch is checkpointed, so plan output storage accordingly.
+
+## Evaluation and experimental controls
+
+Use `evaluate.py` with the same training command arguments, replacing
+`train.py` with `evaluate.py` and adding `--phase test --load_model 1000`.
+`--epochs_per_run` has no effect during evaluation. The original
+`train.py --phase test --load_model 1000` interface also works.
+
+`evaluation_1000.json` contains:
+
+- Independently minimized ADE and FDE across 20 modes, in metres.
+- Per-agent results for sparse (0–2 base-graph neighbors) and crowded (>2)
+  observed groups; these are window-based diagnostic subsets.
+- Parameter count and synchronized forward latency after three warmup batches.
+  Compare on the same GPU and batching; variable scene sizes affect latency.
+- Collision counts for the label-free highest-probability mode of each agent,
+  with a 0.2 m threshold and ground-truth pair counts for context. Modes are
+  not a joint scene distribution; this is a diagnostic, not a safety metric.
+
+Run the following controls on all five folds. See
+[EXPERIMENTS.md](docs/EXPERIMENTS.md) for equations, limitations and reporting.
+
+| Experiment | motion | velocity | closest approach | confidence | adaptive |
+|---|---|---|---|---|---|
+| Corrected baseline | False | ignored | ignored | ignored | ignored |
+| Relative velocity | True | True | False | False | False |
+| Closest approach | True | False | True | False | False |
+| Both feature sets | True | True | True | False | False |
+| Proposed primary model | True | True | True | True | False |
+| Optional graph expansion | True | True | True | True | True |
+
+Use seeds 1, 2 and 3 for the baseline and primary model and, where resources
+permit, the component ablations. Compute the unweighted five-fold average per
+seed, then mean and standard deviation across seeds. Keep optimizer, schedule,
+batch size, augmentation, decoder mode count and checkpoint selection fixed.
+Evaluate the final predetermined epoch; do not select the best test epoch.
+
+There is a common baseline correction: upstream normalizes a scalar attention
+score with LayerNorm, which removes its input dependence, then masks edges by
+whether their score equals zero. This implementation uses the existing linear
+score and an explicit neighbor mask, and preserves isolated agents. Compare
+RiskMotion against **this same correction**, with `fix_attention=True` for
+both. `--fix_attention False --motion_module False` restores the upstream
+attention behavior for a separate control. That control still includes the
+training-protocol fixes and is not a promise of reproducing paper numbers.
+
+## Verification
+
+```bash
+python -m unittest discover -s tests -v
 ```
-python train.py --test_set 0 --num_epochs 1000 --x_encoder_layers 3 --eta_min 1e-5  --batch_size 32\
-  --learning_rate 5e-4  --randomRotate True --final_mode 20 --neighbor_thred 10\
-  --using_cuda True --clip 1 --pass_time 2 --ifGaussian False --SR True --input_offset True
-```
 
-## Test
-We provide the trained model weights in the subdirectory "./savedata/".
-This command is to test model for ETH-eth, just add --phase test --load_model 1000 to the end of this training command.
-```
-python train.py --test_set 0 --num_epochs 1000 --x_encoder_layers 3 --eta_min 1e-5  --batch_size 32\
-  --learning_rate 5e-4  --randomRotate True --final_mode 20 --neighbor_thred 10\
-  --using_cuda True --clip 1 --pass_time 2 --ifGaussian False --SR True --input_offset True --phase test  --load_model 1000
-```
-
-### Cite GATraj
-
-If you find this repo useful, please consider citing our paper
-```bibtex
-@article{cheng2023gatraj,
-  title={Gatraj: A graph-and attention-based multi-agent trajectory prediction model},
-  author={Cheng, Hao and Liu, Mengmeng and Chen, Lin and Broszio, Hellward and Sester, Monika and Yang, Michael Ying},
-  journal={ISPRS Journal of Photogrammetry and Remote Sensing},
-  volume={205},
-  pages={163--175},
-  year={2023},
-  publisher={Elsevier}
-}
-```
-
-### Reference
-
-The code base of dataloader is heavily adopted from [SR-LSTM](https://github.com/zhangpur/SR-LSTM). The visulization code base for nuScenes is adopted from [PGP](https://github.com/nachiket92/PGP).
+Checks cover closest-approach geometry, confidence, bounded neighbors,
+attention masks, component ablations, singleton scenes, residual gradients,
+future-label independence and exact CPU optimizer/scheduler/RNG continuation.
+CPU startup/resume/evaluation on the real ETH/UCY loader is also recorded in
+[EXPERIMENTS.md](docs/EXPERIMENTS.md). GPU convergence and the claimed
+performance hypothesis require the full experiments.

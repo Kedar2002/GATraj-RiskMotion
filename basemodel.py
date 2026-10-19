@@ -129,7 +129,7 @@ class Global_interaction(nn.Module):
         self.WAr = MLP(self.hidden_size*3, 1)
         self.weight = MLP(self.hidden_size)
 
-    def forward(self, corr_index, nei_index, nei_num, hidden_state, cn):
+    def forward(self, corr_index, nei_index, nei_num, hidden_state, cn, edge_embedding=None):
         '''
         States Refinement process
         Params:
@@ -140,7 +140,7 @@ class Global_interaction(nn.Module):
         Return:
             Refined states
         '''
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = hidden_state.device
         self_h = hidden_state
         self.N = corr_index.shape[0]
         self.D = self.hidden_size
@@ -151,6 +151,8 @@ class Global_interaction(nn.Module):
             # Ignore when no neighbor in this batch
             return hidden_state, cn
         r_t = self.relativeLayer(corr_t[nei_index_t > 0]) #[N*N, D]
+        if edge_embedding is not None:
+            r_t = r_t + edge_embedding.reshape(-1, self.hidden_size)[nei_index_t > 0]
         inputs_part = nei_inputs[nei_index_t > 0].float()
         hi_t = nei_inputs.view((self.N, self.N, self.hidden_size)).permute(1, 0, 2).contiguous().view(-1, self.hidden_size) #[N*N, D]
         tmp = torch.cat((r_t, hi_t[nei_index_t > 0],nei_inputs[nei_index_t > 0]), 1) #[N*N, 3*D]
@@ -158,12 +160,22 @@ class Global_interaction(nn.Module):
         nGate = self.ngate(tmp).float() #[N*N, D]
         # Attention
         Pos_t = torch.full((self.N * self.N,1), 0, device=device).view(-1).float()
-        tt = self.WAr(torch.cat((r_t, hi_t[nei_index_t > 0], nei_inputs[nei_index_t > 0]), 1)).view(-1).float() #[N*N, 1]
+        attention_input = torch.cat((r_t, hi_t[nei_index_t > 0], nei_inputs[nei_index_t > 0]), 1)
+        if getattr(self.args, 'fix_attention', True):
+            # LayerNorm over a single scalar erases the attention score.
+            tt = self.WAr.linear(attention_input).view(-1).float()
+        else:
+            tt = self.WAr(attention_input).view(-1).float()
         #have bug if there's any zero value in tt
         Pos_t[nei_index_t > 0] = tt
         Pos = Pos_t.view((self.N, self.N))
-        Pos[Pos == 0] = -10000
-        Pos = torch.softmax(Pos, dim=1)
+        if getattr(self.args, 'fix_attention', True):
+            mask = nei_index > 0
+            Pos = torch.softmax(Pos.masked_fill(~mask, -torch.finfo(Pos.dtype).max), dim=1)
+            Pos = Pos * mask  # Empty rows contribute exactly zero messages.
+        else:
+            Pos[Pos == 0] = -10000
+            Pos = torch.softmax(Pos, dim=1)
         Pos_t = Pos.view(-1)
         # Message Passing
         H = torch.full((self.N * self.N, self.D), 0, device=device).float()
@@ -174,6 +186,10 @@ class Global_interaction(nn.Module):
         # Update hidden states
         C = H_sum + cn #[N, D]
         H = hidden_state + F.tanh(C) #[N, D]
+        if getattr(self.args, 'fix_attention', True):
+            has_neighbor = (nei_index > 0).any(dim=1, keepdim=True)
+            H = torch.where(has_neighbor, H, hidden_state)
+            C = torch.where(has_neighbor, C, cn)
         return H, C
 
 

@@ -8,6 +8,7 @@ import time
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import numpy as np
+import json
 class Processor():
     def __init__(self, args):
         self.args = args
@@ -24,21 +25,15 @@ class Processor():
         self.init_lr = self.args.learning_rate
         self.step_ratio = self.args.step_ratio
         self.lr_step=self.args.lr_step
-        self.set_optimizer()
-        self.epoch = 1
-        self.load_model()
-        # self.save_model(self.epoch)
         if self.args.using_cuda:
             self.net=self.net.cuda()
         else:
             self.net=self.net.cpu()
-        # Checkpoints load on CPU for portability. Move Adam moments to the
-        # model device before the next optimizer step.
-        model_device = next(self.net.parameters()).device
-        for state in self.optimizer.state.values():
-            for key, value in state.items():
-                if torch.is_tensor(value):
-                    state[key] = value.to(model_device)
+        # Construct Adam after moving parameters; load_state_dict maps moments
+        # onto their parameter devices while retaining host-side step counters.
+        self.set_optimizer()
+        self.epoch = 1
+        self.load_model()
         self.net_file = open(os.path.join(self.args.model_dir, 'net.txt'), 'a+')
         self.net_file.write(str(self.net))
         self.net_file.close()
@@ -49,25 +44,28 @@ class Processor():
     def save_model(self,epoch):
         model_path= self.args.save_dir + '/' + self.args.train_model + '/' + self.args.train_model + '_' +\
                                    str(epoch) + '.tar'
+        numpy_state = np.random.get_state()
         torch.save({
             'epoch': epoch,
             'state_dict': self.net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'seed': getattr(self.args, 'seed', 1),
+            'experiment_config': vars(self.args).copy(),
             'rng_state': {
                 'python': random.getstate(),
                 'numpy': (
-                    np.random.get_state()[0],
-                    torch.from_numpy(np.random.get_state()[1].copy()),
-                    int(np.random.get_state()[2]),
-                    int(np.random.get_state()[3]),
-                    float(np.random.get_state()[4]),
+                    numpy_state[0],
+                    torch.from_numpy(numpy_state[1].astype(np.int64)),
+                    int(numpy_state[2]),
+                    int(numpy_state[3]),
+                    float(numpy_state[4]),
                 ),
                 'torch': torch.get_rng_state(),
                 'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
             },
-        }, model_path,_use_new_zipfile_serialization=False)
+        }, model_path + '.tmp')
+        os.replace(model_path + '.tmp', model_path)
 
 
     def load_model(self):
@@ -78,6 +76,23 @@ class Processor():
                 raise FileNotFoundError('Requested checkpoint does not exist: {}'.format(self.args.model_save_path))
             print('Loading checkpoint')
             checkpoint = torch.load(self.args.model_save_path, map_location='cpu')
+            saved_config = checkpoint.get('experiment_config', {})
+            required_keys = [
+                'motion_module', 'relative_velocity', 'closest_approach',
+                'confidence_gate', 'adaptive_neighbors', 'fix_attention',
+                'velocity_window', 'velocity_scale', 'risk_radius', 'adaptive_radius',
+                'hidden_size', 'x_encoder_layers', 'x_encoder_head', 'final_mode',
+                'obs_length', 'pred_length', 'input_offset', 'input_mix',
+                'input_position', 'mlp_decoder', 'SR', 'pass_time', 'ifGaussian',
+                'test_set', 'seed', 'neighbor_thred', 'batch_size', 'val_fraction',
+                'dataset', 'seq_length', 'min_obs', 'input_size', 'output_size', 'ifvalid',
+            ]
+            if self.args.phase == 'train':
+                required_keys += ['num_epochs', 'learning_rate', 'eta_min', 'randomRotate', 'clip']
+            mismatches = [key for key in required_keys if key in saved_config
+                          and saved_config[key] != getattr(self.args, key)]
+            if mismatches:
+                raise ValueError('Checkpoint experiment differs in: ' + ', '.join(mismatches))
             model_epoch = int(checkpoint['epoch'])
             self.epoch = model_epoch + 1
             self.net.load_state_dict(checkpoint['state_dict'])
@@ -108,7 +123,13 @@ class Processor():
                 ))
                 torch.set_rng_state(rng_state['torch'].cpu())
                 if torch.cuda.is_available() and rng_state['cuda']:
-                    torch.cuda.set_rng_state_all(rng_state['cuda'])
+                    # A Kaggle checkpoint can contain two GPU states while a
+                    # resumed Colab runtime exposes only one GPU.
+                    states = rng_state['cuda']
+                    torch.cuda.set_rng_state_all(states[:torch.cuda.device_count()])
+                    saved_gpu = saved_config.get('gpu', 0)
+                    if self.args.using_cuda and saved_gpu < len(states):
+                        torch.cuda.set_rng_state(states[saved_gpu], device=self.args.gpu)
             print('Loaded checkpoint at epoch', model_epoch)
 
 
@@ -122,6 +143,12 @@ class Processor():
         print('Testing begin')
         test_error, test_final_error, _= self.test_epoch(self.args.load_model)
         print('Set: {}, epoch: {:.5f},test_error: {:.5f} test_final_error: {:.5f}'.format(self.args.test_set,self.args.load_model,test_error,test_final_error))
+        with open(os.path.join(self.args.model_dir, 'metrics_{}.json'.format(self.args.load_model)), 'w') as output:
+            json.dump({'test_set': self.args.test_set, 'seed': self.args.seed,
+                       'epoch': self.args.load_model, 'minADE': test_error,
+                       'minFDE': test_final_error, 'num_modes': self.args.final_mode,
+                       'parameters': sum(p.numel() for p in self.net.parameters()),
+                       'experiment': vars(self.args)}, output, indent=2)
 
     def playtrain(self):
         print('Training begin')
@@ -189,6 +216,7 @@ class Processor():
 
         return train_loss_epoch
 
+    @torch.no_grad()
     def val_epoch(self,epoch):
         self.net.eval()
         error_epoch,final_error_epoch, first_erro_epoch = 0,0,0
@@ -223,6 +251,7 @@ class Processor():
             error_epoch_list, final_error_epoch_list, first_erro_epoch_list = [], [], []
         return error_epoch / error_cnt_epoch, final_error_epoch / final_error_cnt_epoch,first_erro_epoch/ first_erro_cnt_epoch
 
+    @torch.no_grad()
     def test_epoch(self,epoch):
         self.net.eval()
         error_epoch, final_error_epoch, first_erro_epoch = 0, 0, 0
