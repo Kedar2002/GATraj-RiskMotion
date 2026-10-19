@@ -16,6 +16,24 @@ checkpoints are excluded from this repository's current files: they are not
 RiskMotion weights. See [the original README](docs/UPSTREAM_README.md) for paper
 attribution and dataset sources. The code supports ETH/UCY, not nuScenes.
 
+## Google Colab
+
+[Open the Colab notebook](https://colab.research.google.com/github/Kedar2002/GATraj-RiskMotion/blob/main/Colab_RiskMotion.ipynb)
+or download [Colab_RiskMotion.ipynb](Colab_RiskMotion.ipynb).
+Select **Runtime → Change runtime type → GPU**, mount Google Drive with the
+first code cell, and run the remaining cells. Set `MOTION_MODULE=True` for
+RiskMotion or `False` for the shared corrected baseline.
+
+The notebook writes each completed epoch directly to
+`MyDrive/GATraj-RiskMotion/runs/` and automatically resumes from the latest
+numbered checkpoint when rerun with the same settings after a runtime restart.
+Training uses 100-epoch chunks with a fixed 1,000-epoch schedule. No manual
+checkpoint copying is needed. After successful chunks, the default cleanup
+keeps every 100th epoch and the latest checkpoint to conserve Drive space;
+disable `PRUNE_INTERMEDIATE_CHECKPOINTS` to keep all epochs. Evaluation reports
+are also saved to Drive. Set `STOP_AT_EPOCH=1` for a startup check while
+keeping `TOTAL_EPOCHS=1000`.
+
 ## Kaggle
 
 Import [Kaggle_RiskMotion.ipynb](Kaggle_RiskMotion.ipynb), enable **Internet**
