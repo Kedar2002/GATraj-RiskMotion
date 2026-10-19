@@ -127,14 +127,14 @@ git clone https://github.com/mengmengliu1998/GATraj.git
 cd GATraj
 python train.py --test_set <dataset to train> --num_epochs 1000 --x_encoder_layers 3 --eta_min 1e-5  --batch_size 32\
   --learning_rate 5e-4  --randomRotate True --final_mode 20 --neighbor_thred 10\
-  --using_cuda True --clip 1 --pass_time 2 --ifGaussian False --SR True --input_offset True 
+  --using_cuda True --clip 1 --pass_time 2 --ifGaussian False --SR True --input_offset True
 ```
 
-Configuration files are also created after the first run, arguments could be modified through configuration files or command line. 
+Configuration files are also created after the first run, arguments could be modified through configuration files or command line.
 Priority: command line \> configuration files \> default values in script.
 
 
-The datasets are selected on arguments '--test_set'. Five datasets in ETH/UCY are corresponding to the value of \[0,1,2,3,4\] ([**eth, hotel, zara1, zara2, univ**]). 
+The datasets are selected on arguments '--test_set'. Five datasets in ETH/UCY are corresponding to the value of \[0,1,2,3,4\] ([**eth, hotel, zara1, zara2, univ**]).
 
 ### Example
 
